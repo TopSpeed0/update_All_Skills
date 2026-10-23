@@ -1,0 +1,18 @@
+{
+  "author": "TopSpeed0",
+  "version": "1.0.0",
+  "category": "developer-tools",
+  "tags": {
+    "he": ["עדכון סקילים", "אבטחה", "חתימה דיגיטלית", "claude.ai", "אוטומציה"],
+    "en": ["skill-updates", "security", "sigstore", "claude.ai", "automation"]
+  },
+  "display_name": {
+    "he": "עדכון סקילים שהועלו",
+    "en": "Skills IL Updater"
+  },
+  "display_description": {
+    "he": "בודק אם לסקילים של Skills IL שהעליתם ל־claude.ai או לאפליקציה יש גרסה חדשה, מאמת את החתימה של כל עדכון ומכין קובץ zip מוכן להעלאה.",
+    "en": "Checks Skills IL skills you uploaded to claude.ai or Claude Desktop for newer versions, verifies each update's signature, and builds a zip ready to upload."
+  },
+  "supported_agents": ["claude-code"]
+}
