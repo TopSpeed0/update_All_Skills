@@ -7,14 +7,15 @@ compatibility: Python 3.9+ (standard library only). GitHub CLI (gh) 2.49+ for si
 
 # Skills IL Updater
 
-An installed Skills IL skill lives in one of two places, and each needs different handling:
+An installed Skills IL skill lives in one of three places, and each needs different handling:
 
 | Where | Available in | Who can update it |
 |---|---|---|
 | **Uploaded** through Customize → Skills → "+" → Upload a skill | every Claude on the account: claude.ai, desktop app, phone | only the user, by uploading a new zip. claude.ai has no upload API |
 | **Local**, a folder in `~/.claude/skills` | Claude Code on this computer | this skill, automatically |
+| **CLI**, installed by `npx skills-il add -g` (listed in `~/.agents/.skill-lock.json`) | Claude Code on this computer | the skills-il CLI. This skill only detects the update and prints the command |
 
-`npx skills-il update` and `gh skill update` only manage skills they installed themselves, so uploaded skills and hand-copied local skills fall behind unnoticed. This skill closes that gap. It updates local copies by itself, and for uploaded skills it does everything except the final click.
+Uploaded skills and hand-copied local skills fall behind unnoticed, because `npx skills-il update` and `gh skill update` only manage skills they installed themselves. CLI installs are not covered either: on Windows the CLI copies the folder, drops `metadata.json` and leaves the lock file's hash empty, so `npx skills-il check` reports "No version hash available". This skill closes all three gaps. It updates local copies by itself, does everything except the final click for uploaded skills, and tells you when a CLI install is stale.
 
 ## Instructions
 
@@ -28,6 +29,7 @@ The script looks for installed skills whose `metadata.json` has `"author": "skil
 
 - **uploaded:** the Claude Desktop cache of claude.ai skills (`%LOCALAPPDATA%\Claude-Data\...\skills-plugin\...\skills` on Windows; the macOS equivalent under `~/Library/Application Support` is best effort). The script only reads this folder. The app re-syncs it from the account, so it never writes there.
 - **local:** `~/.claude/skills`, plus any folder passed with `--skills-dir PATH` (repeatable).
+- **cli:** every GitHub skill in `~/.agents/.skill-lock.json`. Its installed version comes from its `CHANGELOG.md`, because the CLI drops `metadata.json`. It counts as outdated when its repo folder has commits after the install date, or when its `SKILL.md` differs from the latest one (ignoring CRLF). The second check catches installs from an older tag.
 
 Each skill's repo is `skills-il/<category>`, from the `category` field of its `metadata.json`. Expected output, one line per installed copy, then a summary line:
 
@@ -47,13 +49,14 @@ For each outdated copy, the script downloads the skill folder at its latest comm
 
 - **Local copy:** the verified folder replaces the old one. The old folder moves to `~/.claude/skill-backups/<name>-v<old>-<time>` first, so the update can be undone by moving it back. Without `--install-local`, a local copy gets a zip like an uploaded one.
 - **Uploaded copy:** the script writes `<name>-v<version>.zip` to `--out`.
-- **Linked folder** (symlink or Windows junction, as the skills-il CLI creates): left alone. Tell the user to run `npx skills-il update`.
+- **CLI install:** never downloaded or replaced, because the folder belongs to the skills-il CLI and changing it would break its lock file. The report prints the exact command, for example `npx skills-il add skills-il/government-services --skill israel-gov-api -g -a claude-code -y`. Give that command to the user.
+- **Linked folder** (symlink or Windows junction): left alone.
 
 If a signature does not verify, nothing is installed, and no zip is built. Tell the user. Suggest `--allow-unverified` (zips only, it never installs) only if they ask. The usual cause is a skill changed after its last signed release, and the safe option is to wait for the next release.
 
 ### Step 3: Hand over the manual part
 
-Report what was updated automatically, then the zips. Each zip needs these steps, because no agent can upload to claude.ai on the user's behalf:
+Report what was updated automatically, then any `run:` commands for CLI installs, then the zips. Each zip needs these steps, because no agent can upload to claude.ai on the user's behalf:
 
 1. Sidebar → Customize → Skills.
 2. Open the old skill → "..." → Delete, so two skills with the same name are not active.

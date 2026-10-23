@@ -12,7 +12,9 @@ skill and verifies its Sigstore build attestation with `gh attestation verify`.
     because claude.ai has no API for it.
   * Local skills (~/.claude/skills, or --skills-dir): with --install-local the
     verified folder replaces the old one, after a backup to ~/.claude/skill-backups.
-    Skills installed by the skills-il CLI (symlinks) are left to `npx skills-il update`.
+  * Skills installed by `npx skills-il add -g` (listed in ~/.agents/.skill-lock.json):
+    checked read-only, by commits since install and by SKILL.md content, and the
+    exact npx command to update them is printed. Their folders are never touched.
 
 Standard library only. Downloaded files are written and zipped, never executed.
 """
@@ -38,6 +40,10 @@ SKIP_NAMES = {'__pycache__', '.DS_Store', 'Thumbs.db', 'desktop.ini'}
 VERIFY_FILES = ('SKILL.md', 'metadata.json')
 HOME = os.path.expanduser('~')
 BACKUP_ROOT = os.path.join(HOME, '.claude', 'skill-backups')
+# Written by `npx skills-il add -g`. On Windows the CLI copies the folder (no link),
+# drops metadata.json and leaves skillFolderHash empty, so `npx skills-il check`
+# cannot tell whether such a skill is outdated.
+CLI_LOCK = os.path.join(HOME, '.agents', '.skill-lock.json')
 
 
 def default_skill_roots():
@@ -78,6 +84,61 @@ def find_installed(roots, author):
             installs.append({'name': os.path.basename(path), 'version': meta.get('version', '0.0.0'),
                              'category': meta.get('category'), 'path': path, 'kind': kind})
     return sorted(installs, key=lambda s: (s['name'], s['kind']))
+
+
+def read_cli_lock(path=CLI_LOCK):
+    try:
+        with open(path, encoding='utf-8') as f:
+            skills = json.load(f).get('skills', {})
+    except (OSError, ValueError):
+        return []
+    entries = []
+    for name, e in skills.items():
+        if e.get('sourceType') != 'github' or not e.get('source') or not e.get('skillPath'):
+            continue
+        folder = next((p for p in (os.path.join(HOME, '.claude', 'skills', name), os.path.join(HOME, '.agents', 'skills', name))
+                       if os.path.isdir(p)), None)
+        entries.append({'name': name, 'source': e['source'], 'dir': os.path.dirname(e['skillPath']).replace('\\', '/'),
+                        'since': e.get('updatedAt') or e.get('installedAt'), 'path': folder})
+    return entries
+
+
+def changelog_version(folder):
+    """The CLI drops metadata.json, so read the installed version from CHANGELOG.md when there is one."""
+    try:
+        with open(os.path.join(folder, 'CHANGELOG.md'), encoding='utf-8') as f:
+            m = re.search(r'^##\s*\[?v?(\d+\.\d+\.\d+)', f.read(), re.M)
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
+def check_cli(entry, token):
+    """Read-only check of a CLI-installed skill. Returns (latest_version, outdated, reason)."""
+    repo, d = entry['source'], entry['dir']
+    reasons = []
+    if entry['since']:
+        since = urllib.parse.quote(entry['since'])
+        commits = fetch(f'{API}/repos/{repo}/commits?path={urllib.parse.quote(d)}&since={since}&per_page=20', token)
+        if commits:
+            reasons.append(f'{len(commits)} commit(s) since install')
+    try:
+        latest = fetch(f'{RAW}/{repo}/HEAD/{urllib.parse.quote(d)}/metadata.json', token).get('version')
+    except (urllib.error.URLError, ValueError):
+        latest = None
+    # A skill installed from an older tag has no newer commits after its install
+    # date, so compare the instructions too. The CLI writes CRLF on Windows.
+    if entry['path'] and os.path.exists(os.path.join(entry['path'], 'SKILL.md')):
+        upstream = fetch(f'{RAW}/{repo}/HEAD/{urllib.parse.quote(d)}/SKILL.md', token, raw=True)
+        with open(os.path.join(entry['path'], 'SKILL.md'), 'rb') as f:
+            local = f.read()
+        if local.replace(b'\r\n', b'\n') != upstream.replace(b'\r\n', b'\n'):
+            reasons.append('SKILL.md differs from the latest version')
+    return latest, bool(reasons), '; '.join(reasons)
+
+
+def npx_update_command(entry):
+    return f'npx skills-il add {entry["source"]} --skill {entry["name"]} -g -a claude-code -y'
 
 
 def parse_version(v):
@@ -201,12 +262,32 @@ def main():
     args = ap.parse_args()
 
     roots = default_skill_roots() + [(d, kind_of(os.path.abspath(d))) for d in args.skills_dir]
-    installs = find_installed(roots, args.author)
+    cli_entries = read_cli_lock()
+    cli_names = {e['name'] for e in cli_entries}
+    # A folder the skills-il CLI owns is never replaced by this script, even if it kept metadata.json.
+    installs = [i for i in find_installed(roots, args.author) if not (i['kind'] == 'local' and i['name'] in cli_names)]
     token = github_token()
     latest_cache = {}
     report = []
+    for entry in cli_entries:
+        row = {'name': entry['name'], 'kind': 'cli', 'path': entry['path'], 'category': None,
+               'version': (changelog_version(entry['path']) if entry['path'] else None) or '?',
+               'latest': None, 'status': '', 'zip': None, 'backup': None, 'verification': None,
+               'action': None, 'command': None}
+        report.append(row)
+        try:
+            row['latest'], outdated, reason = check_cli(entry, token)
+        except (urllib.error.URLError, ValueError, KeyError, OSError) as e:
+            row['status'] = f'lookup failed: {e}'
+            continue
+        if outdated:
+            row['command'] = npx_update_command(entry)
+            row['status'] = f'update available ({reason}); folder left to the skills-il CLI'
+            row['action'] = 'cli'
+        else:
+            row['status'] = 'up to date'
     for inst in installs:
-        row = dict(inst, latest=None, status='', zip=None, backup=None, verification=None, action=None)
+        row = dict(inst, latest=None, status='', zip=None, backup=None, verification=None, action=None, command=None)
         report.append(row)
         if not inst.get('category'):
             row['status'] = 'no category in metadata.json; cannot locate repo'
@@ -259,7 +340,8 @@ def main():
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    outdated = [r for r in report if r['latest'] and parse_version(r['latest']) > parse_version(r['version'])]
+    outdated = [r for r in report if r['action'] == 'cli' or
+                (r['latest'] and r['kind'] != 'cli' and parse_version(r['latest']) > parse_version(r['version']))]
     summary = {
         'updates': len(outdated),
         'installed': sum(1 for r in outdated if r['action'] == 'done'),
@@ -272,9 +354,9 @@ def main():
         print(f'No installed skills by "{args.author}" found in: ' + ('; '.join(r for r, _ in roots) or 'no skill folders'))
     for r in report:
         print(f'{r["name"]:<32} {r["kind"]:<8} {r["version"]:>8} -> {str(r["latest"] or "?"):<8} {r["status"]}')
-        for extra in ('verification', 'zip', 'backup'):
+        for extra in ('verification', 'zip', 'backup', 'command'):
             if r[extra]:
-                label = 'backup: ' if extra == 'backup' else ''
+                label = {'backup': 'backup: ', 'command': 'run: '}.get(extra, '')
                 print(f'{"":<41} {label}{r[extra]}')
     print(f'UPDATES: {summary["updates"]}  INSTALLED: {summary["installed"]}  MANUAL: {summary["manual"]}')
     return 0

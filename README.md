@@ -1,11 +1,12 @@
 # update_All_Skills
 
-**skills-il-updater** keeps your [Skills IL](https://agentskills.co.il) skills current, whether you uploaded them to claude.ai or keep them as local Claude Code folders.
+**skills-il-updater** keeps your [Skills IL](https://agentskills.co.il) skills current, whether you uploaded them to claude.ai, keep them as local Claude Code folders, or installed them with `npx skills-il`.
 
 | Where the skill is installed | Find the update | Download and verify the signature | Replace the old version |
 |---|---|---|---|
 | Local: `~/.claude/skills` (Claude Code) | automatic | automatic | **automatic**, after a backup |
 | Uploaded: claude.ai / Claude Desktop | automatic | automatic, as a ready zip | **manual**: Customize → Skills → Upload. claude.ai has no upload API |
+| CLI: `npx skills-il add -g` | automatic, from `~/.agents/.skill-lock.json` | left to the CLI | **one command**, printed for you |
 
 `npx skills-il update` and `gh skill update` only update skills that they installed themselves. The skills-il site can also notify you about skills you've saved there, but updating uploaded skills is still manual, one at a time. This skill:
 
@@ -13,8 +14,9 @@
 2. compares each with its repo, `skills-il/<category>`,
 3. downloads each outdated skill and verifies its Sigstore build signature with `gh attestation verify`,
 4. replaces local copies in place (old version kept in `~/.claude/skill-backups/`) and writes upload zips for uploaded ones.
+5. checks skills installed by `npx skills-il add -g` by commits since install and by `SKILL.md` content, then prints the exact `npx` command. On Windows the CLI leaves the lock hash empty, so `npx skills-il check` can't do this itself.
 
-Nothing is installed or zipped unless the signature verifies. Downloaded files are never executed. The app's own skill cache and skills-il CLI links are only read, never changed.
+Nothing is installed or zipped unless the signature verifies. Downloaded files are never executed. The app's own skill cache and folders owned by the skills-il CLI are only read, never changed.
 
 ## Install
 
