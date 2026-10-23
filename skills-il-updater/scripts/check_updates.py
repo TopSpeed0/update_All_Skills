@@ -13,8 +13,13 @@ skill and verifies its Sigstore build attestation with `gh attestation verify`.
   * Local skills (~/.claude/skills, or --skills-dir): with --install-local the
     verified folder replaces the old one, after a backup to ~/.claude/skill-backups.
   * Skills installed by `npx skills-il add -g` (listed in ~/.agents/.skill-lock.json):
-    checked read-only, by commits since install and by SKILL.md content, and the
-    exact npx command to update them is printed. Their folders are never touched.
+    with --update the script runs `npx skills-il update`, then re-installs (one skill,
+    with --skill) any that update skipped, detected by commits since install and by
+    SKILL.md content. It never edits those folders itself, and runs npx only with a
+    working GitHub token, because a failed GitHub call makes the CLI record an empty
+    hash and stop updating that skill.
+
+With --update, the only thing left for the user is uploading the zips in ~/skill-updates.
 
 Standard library only. Downloaded files are written and zipped, never executed.
 """
@@ -138,8 +143,50 @@ def check_cli(entry, token):
     return latest, bool(reasons), '; '.join(reasons)
 
 
-def npx_update_command(entry):
-    return f'npx skills-il add {entry["source"]} --skill {entry["name"]} -g -a claude-code -y'
+ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+
+
+def find_npx():
+    for cand in ('npx', 'npx.cmd', os.path.join(os.environ.get('ProgramFiles', r'C:\Program Files'), 'nodejs', 'npx.cmd')):
+        found = shutil.which(cand) or (cand if os.path.isfile(cand) else None)
+        if found:
+            return found
+    return None
+
+
+def token_ok(token):
+    """The skills-il CLI records an empty hash, silently, when its GitHub calls fail,
+    and then never updates that skill again. So npx only runs with a working token."""
+    if not token:
+        return False
+    try:
+        fetch(f'{API}/user', token)
+        return True
+    except (urllib.error.URLError, ValueError):
+        return False
+
+
+def run_npx(npx, args, token):
+    env = dict(os.environ, GITHUB_TOKEN=token)
+    res = subprocess.run([npx, '-y', 'skills-il', *args], cwd=HOME, env=env, capture_output=True,
+                         text=True, encoding='utf-8', errors='replace', timeout=900)
+    out = ANSI.sub('', (res.stdout or '') + (res.stderr or ''))
+    return res.returncode, out
+
+
+def lock_stamps():
+    try:
+        with open(CLI_LOCK, encoding='utf-8') as f:
+            skills = json.load(f).get('skills', {})
+    except (OSError, ValueError):
+        return {}
+    return {n: (e.get('updatedAt'), e.get('skillFolderHash')) for n, e in skills.items()}
+
+
+def reinstall_args(entry):
+    # Names the one skill: the CLI's own fallback hint (`npx skills add <repo> -g -y`)
+    # has no --skill and would install every skill in the repo.
+    return ['add', entry['source'], '--skill', entry['name'], '-g', '-a', 'claude-code', '-y']
 
 
 def parse_version(v):
@@ -250,45 +297,92 @@ def main():
                     help='extra folder that contains installed skill folders (repeatable)')
     ap.add_argument('--author', default='skills-il', help='metadata.json author to check (default: skills-il)')
     ap.add_argument('--owner', default='skills-il', help='GitHub org that hosts the category repos')
-    ap.add_argument('--out', default=os.path.join(os.getcwd(), 'skill-updates'),
-                    help='folder for the upload zips (default: ./skill-updates)')
-    ap.add_argument('--check-only', action='store_true', help='report versions, download nothing')
+    ap.add_argument('--out', default=os.path.join(HOME, 'skill-updates'),
+                    help='folder for the upload zips (default: ~/skill-updates)')
+    ap.add_argument('--check-only', action='store_true', help='report versions, change nothing')
+    ap.add_argument('--update', action='store_true',
+                    help='do everything that can be automatic: run npx skills-il update, re-install CLI skills '
+                         'it cannot update, replace local copies (with a backup), and build zips for uploaded skills')
     ap.add_argument('--install-local', action='store_true',
-                    help='replace outdated local skills in place (after verification and a backup)')
+                    help='only replace outdated local skills in place (implied by --update)')
     ap.add_argument('--backup-dir', default=BACKUP_ROOT,
                     help=f'where replaced local skills are kept (default: {BACKUP_ROOT})')
     ap.add_argument('--allow-unverified', action='store_true',
                     help='build a zip even when the signature check fails or cannot run (never installs)')
     ap.add_argument('--json', action='store_true', help='print a JSON report instead of a table')
     args = ap.parse_args()
+    if args.update:
+        args.install_local = True
+    if args.check_only:
+        args.update = args.install_local = False
 
     roots = default_skill_roots() + [(d, kind_of(os.path.abspath(d))) for d in args.skills_dir]
+    token = github_token()
+    report = []
+    notes = []
+
+    # 1. CLI installs. The CLI owns these folders, so they are only ever changed through npx.
+    valid_token = token_ok(token)
+    if token and not valid_token:
+        notes.append('GITHUB_TOKEN is invalid or expired; checking GitHub anonymously (60 requests an hour)')
+        token = None
+    npx = find_npx() if args.update and read_cli_lock() else None
+    can_npx = bool(npx) and valid_token
+    if args.update and read_cli_lock():
+        if not npx:
+            notes.append('npx not found: install Node.js LTS so CLI-installed skills can be updated')
+        elif not can_npx:
+            notes.append('GITHUB_TOKEN missing or invalid: npx skipped, because the CLI would record an empty hash '
+                         'and stop updating those skills (run gh auth login or renew the token)')
+    before = lock_stamps()
+    if can_npx:
+        code, out = run_npx(npx, ['update'], token)
+        if code != 0:
+            notes.append('npx skills-il update failed: ' + (out.strip().splitlines() or ['no output'])[-1])
+    after_update = lock_stamps()
     cli_entries = read_cli_lock()
     cli_names = {e['name'] for e in cli_entries}
-    # A folder the skills-il CLI owns is never replaced by this script, even if it kept metadata.json.
-    installs = [i for i in find_installed(roots, args.author) if not (i['kind'] == 'local' and i['name'] in cli_names)]
-    token = github_token()
-    latest_cache = {}
-    report = []
     for entry in cli_entries:
         row = {'name': entry['name'], 'kind': 'cli', 'path': entry['path'], 'category': None,
                'version': (changelog_version(entry['path']) if entry['path'] else None) or '?',
-               'latest': None, 'status': '', 'zip': None, 'backup': None, 'verification': None,
-               'action': None, 'command': None}
+               'latest': None, 'status': '', 'zip': None, 'backup': None, 'verification': None, 'action': None}
         report.append(row)
+        updated_by_cli = before.get(entry['name'], (None,))[0] != after_update.get(entry['name'], (None,))[0]
         try:
             row['latest'], outdated, reason = check_cli(entry, token)
-        except (urllib.error.URLError, ValueError, KeyError, OSError) as e:
-            row['status'] = f'lookup failed: {e}'
+            if outdated and can_npx:
+                # `update` skipped it (typically an empty hash from an earlier failed install).
+                # Re-adding just this skill installs the latest version and records a fresh hash.
+                code, out = run_npx(npx, reinstall_args(entry), token)
+                entry = next((e for e in read_cli_lock() if e['name'] == entry['name']), entry)
+                row['latest'], outdated, reason = check_cli(entry, token)
+                if not outdated:
+                    row['version'] = changelog_version(entry['path']) or row['version'] if entry['path'] else row['version']
+                    row['status'] = 'updated: re-installed with npx (update had skipped it)'
+                    row['action'] = 'done'
+                    continue
+                row['status'] = f'still outdated after re-install ({reason})'
+                row['action'] = 'blocked'
+                continue
+        except (urllib.error.URLError, ValueError, KeyError, OSError, subprocess.SubprocessError) as e:
+            row['status'] = f'failed: {e}'
+            row['action'] = 'blocked'
             continue
         if outdated:
-            row['command'] = npx_update_command(entry)
-            row['status'] = f'update available ({reason}); folder left to the skills-il CLI'
-            row['action'] = 'cli'
+            row['status'] = f'update available ({reason})' + ('' if args.check_only else '; not updated, see notes')
+            row['action'] = 'auto' if args.check_only else 'blocked'
+        elif updated_by_cli:
+            row['status'] = 'updated by npx skills-il update'
+            row['action'] = 'done'
         else:
             row['status'] = 'up to date'
+
+    # 2. Uploaded and hand-copied skills (identified by metadata.json).
+    # A folder the skills-il CLI owns is never replaced here, even if it kept metadata.json.
+    installs = [i for i in find_installed(roots, args.author) if not (i['kind'] == 'local' and i['name'] in cli_names)]
+    latest_cache = {}
     for inst in installs:
-        row = dict(inst, latest=None, status='', zip=None, backup=None, verification=None, action=None, command=None)
+        row = dict(inst, latest=None, status='', zip=None, backup=None, verification=None, action=None)
         report.append(row)
         if not inst.get('category'):
             row['status'] = 'no category in metadata.json; cannot locate repo'
@@ -308,12 +402,12 @@ def main():
         linked = os.path.islink(inst['path']) or getattr(os.path, 'isjunction', lambda p: False)(inst['path'])
         cli_managed = inst['kind'] == 'local' and linked
         if cli_managed:
-            row['status'] = 'linked folder, left alone; if the skills-il CLI installed it, run npx skills-il update'
-            row['action'] = 'cli'
+            row['status'] = 'linked folder, left alone (not something this skill can replace safely)'
+            row['action'] = 'blocked'
             continue
         if args.check_only:
             row['status'] = 'update available'
-            row['action'] = 'manual' if inst['kind'] == 'uploaded' or not args.install_local else 'auto'
+            row['action'] = 'manual' if inst['kind'] == 'uploaded' else 'auto'
             continue
         tmp = tempfile.mkdtemp(prefix='skill-update-')
         try:
@@ -341,25 +435,32 @@ def main():
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    outdated = [r for r in report if r['action'] == 'cli' or
-                (r['latest'] and r['kind'] != 'cli' and parse_version(r['latest']) > parse_version(r['version']))]
+    outdated = [r for r in report if r['action'] in ('done', 'manual', 'blocked', 'auto')]
     summary = {
         'updates': len(outdated),
         'installed': sum(1 for r in outdated if r['action'] == 'done'),
-        'manual': sum(1 for r in outdated if r['action'] in ('manual', 'cli', 'blocked')),
+        # Only zips need the user. Anything blocked is reported in the table and notes.
+        'manual': sum(1 for r in outdated if r['action'] == 'manual'),
+        'blocked': sum(1 for r in outdated if r['action'] == 'blocked'),
     }
     if args.json:
-        print(json.dumps({'roots': [r for r, _ in roots], 'skills': report, **summary}, ensure_ascii=False, indent=2))
+        print(json.dumps({'roots': [r for r, _ in roots], 'out': args.out, 'skills': report, 'notes': notes,
+                          **summary}, ensure_ascii=False, indent=2))
         return 0
     if not report:
         print(f'No installed skills by "{args.author}" found in: ' + ('; '.join(r for r, _ in roots) or 'no skill folders'))
     for r in report:
         print(f'{r["name"]:<32} {r["kind"]:<8} {r["version"]:>8} -> {str(r["latest"] or "?"):<8} {r["status"]}')
-        for extra in ('verification', 'zip', 'backup', 'command'):
+        for extra in ('verification', 'zip', 'backup'):
             if r[extra]:
-                label = {'backup': 'backup: ', 'command': 'run: '}.get(extra, '')
+                label = 'backup: ' if extra == 'backup' else ''
                 print(f'{"":<41} {label}{r[extra]}')
-    print(f'UPDATES: {summary["updates"]}  INSTALLED: {summary["installed"]}  MANUAL: {summary["manual"]}')
+    for n in notes:
+        print(f'NOTE: {n}')
+    if summary['manual']:
+        print(f'ZIPS TO UPLOAD: {args.out}')
+    print(f'UPDATES: {summary["updates"]}  INSTALLED: {summary["installed"]}  MANUAL: {summary["manual"]}  '
+          f'BLOCKED: {summary["blocked"]}')
     return 0
 
 

@@ -1,22 +1,34 @@
 # update_All_Skills
 
-**skills-il-updater** keeps your [Skills IL](https://agentskills.co.il) skills current, whether you uploaded them to claude.ai, keep them as local Claude Code folders, or installed them with `npx skills-il`.
+**skills-il-updater** keeps every [Skills IL](https://agentskills.co.il) skill on your machine current with one command, however you installed it:
 
-| Where the skill is installed | Find the update | Download and verify the signature | Replace the old version |
-|---|---|---|---|
-| Local: `~/.claude/skills` (Claude Code) | automatic | automatic | **automatic**, after a backup |
-| Uploaded: claude.ai / Claude Desktop | automatic | automatic, as a ready zip | **manual**: Customize → Skills → Upload. claude.ai has no upload API |
-| CLI: `npx skills-il add -g` | automatic, from `~/.agents/.skill-lock.json` | by the CLI | **automatic** with `npx skills-il update` in the same weekly job; the updater only reports what it misses |
+```bash
+python skills-il-updater/scripts/check_updates.py --update
+```
 
-`npx skills-il update` and `gh skill update` only update skills that they installed themselves. The skills-il site can also notify you about skills you've saved there, but updating uploaded skills is still manual, one at a time. This skill:
+You only need to remember two things:
 
-1. finds your installed Skills IL skills (`"author": "skills-il"` in `metadata.json`),
-2. compares each with its repo, `skills-il/<category>`,
-3. downloads each outdated skill and verifies its Sigstore build signature with `gh attestation verify`,
-4. replaces local copies in place (old version kept in `~/.claude/skill-backups/`) and writes upload zips for uploaded ones.
-5. checks skills installed by `npx skills-il add -g` by commits since install and by `SKILL.md` content, then prints the exact `npx` command. This also covers installs that `npx skills-il check` cannot check: when the CLI can't reach the GitHub API during install (for example with an expired `GITHUB_TOKEN`), it records an empty hash without a warning.
+1. **Schedule** that command weekly, if you want it to run by itself.
+2. **Upload the zips** from `~/skill-updates` for skills you keep in claude.ai. claude.ai has no upload API, so this is the one manual step.
 
-Nothing is installed or zipped unless the signature verifies. Downloaded files are never executed. The app's own skill cache and folders owned by the skills-il CLI are only read, never changed.
+| Installed as | What `--update` does | You |
+|---|---|---|
+| CLI: `npx skills-il add -g` | runs `npx skills-il update`, and re-installs (that skill only) any it silently skips | nothing |
+| Local copy in `~/.claude/skills` | downloads, verifies the Sigstore signature, backs up, replaces | nothing |
+| Uploaded to claude.ai / Claude Desktop | downloads, verifies, writes a zip to `~/skill-updates` | upload it |
+
+Nothing is installed or zipped unless the signature verifies. Downloaded files are never executed. The desktop app's skill cache is only read, and CLI folders are changed only by the CLI.
+
+## Why it exists
+
+Found while testing on Windows 11 (full list in [`SKILL.md`](skills-il-updater/SKILL.md#known-issues-this-skill-works-around)):
+
+- `npx skills-il update` and `gh skill update` only update their own installs. Uploaded skills fall behind silently.
+- If the skills-il CLI can't reach GitHub during install (an expired `GITHUB_TOKEN` is enough), it records an empty hash without a warning. From then on `npx skills-il check` and `update` skip that skill for good.
+- The CLI's suggested fix (`npx skills add <repo> -g -y`) uses the wrong package and has no `--skill`, so it installs every skill in the repo.
+- The CLI doesn't copy `metadata.json`. Its files arrive with CRLF, Windows junctions hide from `islink`, and the desktop app keeps a stale token until it restarts.
+
+The updater detects all of these, checks the token before letting npx run, and repairs a skipped skill by re-installing just that skill.
 
 ## Install
 
@@ -28,33 +40,27 @@ Or copy the `skills-il-updater/` folder into `~/.claude/skills/`.
 
 ## Use
 
-Ask your agent "are my skills up to date?" or "update my skills". You can also run the script yourself:
-
 ```bash
-python skills-il-updater/scripts/check_updates.py --check-only                        # report only
-python skills-il-updater/scripts/check_updates.py --install-local --out ./skill-updates
+python skills-il-updater/scripts/check_updates.py --check-only   # look, change nothing
+python skills-il-updater/scripts/check_updates.py --update       # update everything that can be automatic
 ```
 
-Example run, 2026-10-24:
+Example run, 2026-10-24, after an npx install had been left with an empty hash:
 
 ```
-hebrew-document-generator        local       1.6.0 -> 1.8.0    updated in place
-                                          Sigstore attestation verified for SKILL.md, metadata.json
-                                          backup: ~/.claude/skill-backups/hebrew-document-generator-v1.6.0-20261024-001654
-hebrew-document-generator        uploaded    1.6.0 -> 1.8.0    zip ready, upload it
-israeli-bureaucracy-decoder      uploaded    1.2.2 -> 1.3.3    zip ready, upload it
-israeli-rental-agreements        uploaded    1.2.0 -> 2.0.0    zip ready, upload it
-UPDATES: 4  INSTALLED: 1  MANUAL: 3
+israel-gov-api                   cli         1.4.0 -> 1.4.0    updated: re-installed with npx (update had skipped it)
+israeli-bureaucracy-decoder      uploaded    1.3.3 -> 1.3.3    up to date
+israeli-rental-agreements        uploaded    2.0.0 -> 2.0.0    up to date
+UPDATES: 1  INSTALLED: 1  MANUAL: 0  BLOCKED: 0
 ```
 
-To run it every week, schedule these two commands, in this order:
+To schedule it weekly, on Windows:
 
-```bash
-npx skills-il update                                                          # skills the CLI installed (needs a valid GITHUB_TOKEN)
-python skills-il-updater/scripts/check_updates.py --install-local --out ./skill-updates
+```
+schtasks /Create /SC WEEKLY /D SUN /ST 09:00 /TN skills-il-updater /TR "python <path>\skills-il-updater\scripts\check_updates.py --update"
 ```
 
-The first updates npx installs, and the second handles everything else. Only `MANUAL` in the last line needs you, and that means zips to upload.
+With cron: `0 9 * * 0 python3 <path>/skills-il-updater/scripts/check_updates.py --update`. Either way, you need a working GitHub login (`gh auth login` or `GITHUB_TOKEN`).
 
 ## Verify this skill's own release
 
@@ -67,15 +73,17 @@ gh attestation verify skills-il-updater/SKILL.md --repo TopSpeed0/update_All_Ski
 ## Requirements
 
 - Python 3.9+ (standard library only)
-- [GitHub CLI](https://cli.github.com) 2.49+, logged in, for signature checks and a higher API rate limit
+- [GitHub CLI](https://cli.github.com) 2.49+, logged in
+- Node.js LTS, only if you install skills with `npx skills-il`
 
 ## עברית
 
-הסקיל שומר על הסקילים של Skills IL מעודכנים:
-- **סקילים מקומיים** ב־Claude Code מתעדכנים לבד, אחרי אימות חתימה ועם גיבוי של הגרסה הקודמת.
-- **לסקילים שהועלו** ל־claude.ai הוא מכין zip מאומת. ההעלאה עצמה נשארת ידנית, כי ל־claude.ai אין API להעלאה.
+פקודה אחת, `--update`, מעדכנת את כל הסקילים של Skills IL במחשב:
+- **סקילים מ־npx:** מתעדכנים אוטומטית. אם ה־CLI מדלג על סקיל בגלל hash ריק, הסקיל מתקין אותו מחדש לבד.
+- **עותקים מקומיים:** מוחלפים אוטומטית, אחרי אימות חתימה ועם גיבוי.
+- **סקילים שהועלו ל־claude.ai:** מקבלים zip מאומת ב־`~/skill-updates`.
 
-ההוראות המלאות בעברית נמצאות ב־`skills-il-updater/SKILL_HE.md`.
+צריך לזכור רק שני דברים: לתזמן את הפקודה, ולהעלות את קובצי ה־zip. ההוראות המלאות בעברית נמצאות ב־`skills-il-updater/SKILL_HE.md`.
 
 ## License
 
