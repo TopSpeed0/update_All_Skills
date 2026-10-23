@@ -40,9 +40,10 @@ SKIP_NAMES = {'__pycache__', '.DS_Store', 'Thumbs.db', 'desktop.ini'}
 VERIFY_FILES = ('SKILL.md', 'metadata.json')
 HOME = os.path.expanduser('~')
 BACKUP_ROOT = os.path.join(HOME, '.claude', 'skill-backups')
-# Written by `npx skills-il add -g`. On Windows the CLI copies the folder (no link),
-# drops metadata.json and leaves skillFolderHash empty, so `npx skills-il check`
-# cannot tell whether such a skill is outdated.
+# Written by `npx skills-il add -g`. The CLI drops metadata.json, and when it cannot
+# reach the GitHub API during install (an expired GITHUB_TOKEN is enough) it records
+# an empty skillFolderHash without a warning; `npx skills-il check` then reports
+# "No version hash available" and never updates that skill.
 CLI_LOCK = os.path.join(HOME, '.agents', '.skill-lock.json')
 
 

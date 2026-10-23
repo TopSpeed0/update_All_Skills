@@ -14,7 +14,7 @@
 2. compares each with its repo, `skills-il/<category>`,
 3. downloads each outdated skill and verifies its Sigstore build signature with `gh attestation verify`,
 4. replaces local copies in place (old version kept in `~/.claude/skill-backups/`) and writes upload zips for uploaded ones.
-5. checks skills installed by `npx skills-il add -g` by commits since install and by `SKILL.md` content, then prints the exact `npx` command. On Windows the CLI leaves the lock hash empty, so `npx skills-il check` can't do this itself.
+5. checks skills installed by `npx skills-il add -g` by commits since install and by `SKILL.md` content, then prints the exact `npx` command. This also covers installs that `npx skills-il check` cannot check: when the CLI can't reach the GitHub API during install (for example with an expired `GITHUB_TOKEN`), it records an empty hash without a warning.
 
 Nothing is installed or zipped unless the signature verifies. Downloaded files are never executed. The app's own skill cache and folders owned by the skills-il CLI are only read, never changed.
 

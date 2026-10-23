@@ -15,7 +15,7 @@ An installed Skills IL skill lives in one of three places, and each needs differ
 | **Local**, a folder in `~/.claude/skills` | Claude Code on this computer | this skill, automatically |
 | **CLI**, installed by `npx skills-il add -g` (listed in `~/.agents/.skill-lock.json`) | Claude Code on this computer | the skills-il CLI. This skill only detects the update and prints the command |
 
-Uploaded skills and hand-copied local skills fall behind unnoticed, because `npx skills-il update` and `gh skill update` only manage skills they installed themselves. CLI installs are not covered either: on Windows the CLI copies the folder, drops `metadata.json` and leaves the lock file's hash empty, so `npx skills-il check` reports "No version hash available". This skill closes all three gaps. It updates local copies by itself, does everything except the final click for uploaded skills, and tells you when a CLI install is stale.
+Uploaded skills and hand-copied local skills fall behind unnoticed, because `npx skills-il update` and `gh skill update` only manage skills they installed themselves. CLI installs have a gap of their own. If the CLI could not reach the GitHub API during install (an expired `GITHUB_TOKEN` is enough), it records an empty hash without warning, and `npx skills-il check` then reports "No version hash available" for that skill forever. The CLI also drops `metadata.json`, so the installed version is not on disk. This skill closes all three gaps. It updates local copies by itself, does everything except the final click for uploaded skills, and tells you when a CLI install is stale.
 
 ## Instructions
 

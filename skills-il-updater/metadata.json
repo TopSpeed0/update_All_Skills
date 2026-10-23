@@ -1,6 +1,6 @@
 {
   "author": "TopSpeed0",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "category": "developer-tools",
   "tags": {
     "he": [
@@ -23,8 +23,8 @@
     "en": "Skills IL Updater"
   },
   "display_description": {
-    "he": "שומר על הסקילים של Skills IL מעודכנים: מעדכן לבד עותקים מקומיים ב־Claude Code, מכין zip מאומת לסקילים שהועלו ל־claude.ai, ומזהה התקנות npx ישנות שה־CLI עצמו לא יודע לבדוק.",
-    "en": "Keeps Skills IL skills current: updates local Claude Code copies by itself, builds verified zips for skills uploaded to claude.ai, and flags stale npx installs that the CLI itself cannot check."
+    "he": "שומר על הסקילים של Skills IL מעודכנים: מעדכן לבד עותקים מקומיים ב־Claude Code, מכין zip מאומת לסקילים שהועלו ל־claude.ai, ומזהה התקנות npx ישנות שה־CLI לא תמיד יודע לבדוק.",
+    "en": "Keeps Skills IL skills current: updates local Claude Code copies by itself, builds verified zips for skills uploaded to claude.ai, and flags stale npx installs that the CLI cannot always check."
   },
   "supported_agents": [
     "claude-code"
