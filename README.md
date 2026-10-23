@@ -6,7 +6,7 @@
 |---|---|---|---|
 | Local: `~/.claude/skills` (Claude Code) | automatic | automatic | **automatic**, after a backup |
 | Uploaded: claude.ai / Claude Desktop | automatic | automatic, as a ready zip | **manual**: Customize → Skills → Upload. claude.ai has no upload API |
-| CLI: `npx skills-il add -g` | automatic, from `~/.agents/.skill-lock.json` | left to the CLI | **one command**, printed for you |
+| CLI: `npx skills-il add -g` | automatic, from `~/.agents/.skill-lock.json` | by the CLI | **automatic** with `npx skills-il update` in the same weekly job; the updater only reports what it misses |
 
 `npx skills-il update` and `gh skill update` only update skills that they installed themselves. The skills-il site can also notify you about skills you've saved there, but updating uploaded skills is still manual, one at a time. This skill:
 
@@ -47,7 +47,14 @@ israeli-rental-agreements        uploaded    1.2.0 -> 2.0.0    zip ready, upload
 UPDATES: 4  INSTALLED: 1  MANUAL: 3
 ```
 
-To run it every week, schedule the second command. Then look at `MANUAL` in the last line: only that count needs you.
+To run it every week, schedule these two commands, in this order:
+
+```bash
+npx skills-il update                                                          # skills the CLI installed (needs a valid GITHUB_TOKEN)
+python skills-il-updater/scripts/check_updates.py --install-local --out ./skill-updates
+```
+
+The first updates npx installs, and the second handles everything else. Only `MANUAL` in the last line needs you, and that means zips to upload.
 
 ## Verify this skill's own release
 

@@ -65,7 +65,12 @@ Report what was updated automatically, then any `run:` commands for CLI installs
 
 ### Step 4 (optional): Make it a weekly routine
 
-Schedule `python scripts/check_updates.py --install-local --out <folder>` once a week with the agent's scheduler or the OS (cron, Task Scheduler). Read the last line. Notify the user only when `MANUAL` is not 0, and mention any `INSTALLED` updates in one line. A week with nothing to do stays quiet.
+Schedule two commands once a week with the agent's scheduler or the OS (cron, Task Scheduler), in this order:
+
+1. `npx skills-il update`, if the user installs skills with the skills-il CLI. The CLI updates its own folders. This skill never touches them. Make sure a valid `GITHUB_TOKEN` (or `gh auth login`) is in place: with an expired token the CLI records an empty hash and silently stops updating that skill. Do not run the fallback command it prints for such skills (`npx skills add <repo> -g -y`), because it installs every skill in the repo.
+2. `python scripts/check_updates.py --install-local --out <folder>`. This replaces hand-copied local skills, builds zips for uploaded ones, and reports any CLI install that step 1 could not update.
+
+Read the last line. Notify the user only when `MANUAL` is not 0, and mention automatic updates (from step 1 and `INSTALLED`) in one line. A week with nothing to do stays quiet.
 
 ## Examples
 
